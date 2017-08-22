@@ -16,13 +16,49 @@ local world
 
 local World = {}
 
-function World:new(file)
-	return setmetatable({
-		file = file,
-		lines = {},
+function World.open(filename, parent)
+	local world = {
+		lines  = {},
+		warps  = {},
 		starts = {},
-		warps = {},
-	}, {__index = World})
+
+		filename = filename,
+		parent   = parent,
+
+		cursorX = 1, cursorY = 1,
+		cameraX = 1, cameraY = 1,
+
+		modified = false
+	}
+
+	if filename and fs.exists(filename) then
+		world.isReadOnly = fs.isReadOnly(filename)
+		
+		local f = fs.open(filename, "r")
+
+		if not f then
+			return nil, "Cannot open file: "..filename
+		end
+
+		for l in f.readLine do
+			local line = {}
+
+			for i = 1, l:len() do
+				line[i] = l:sub(i, i)
+			end
+
+			table.insert(world.lines, {
+				text = line,
+				needsUpdate = true
+			})
+		end
+
+		f.close()
+	else
+		world.isNewFile = true
+	end
+
+	return setmetatable(world, {__index = World})
 end
 
 function World:updateLine(lineNum)
@@ -217,7 +253,7 @@ function World:updateAll()
 				if self.warps[warpName] then
 					mark(warpXPos, "invalid")
 				else
-					self.libs[name] = self.libs[name] or {}
+					self.libs[name] = self.libs[name] or name
 					self.warps[warpName] = {
 						lib = libName,
 						{
@@ -275,8 +311,7 @@ function World:updateAll()
 	return changedLines
 end
 
---------------------------------
-
+------------------------------------------------
 
 -- local world, scopes
 
