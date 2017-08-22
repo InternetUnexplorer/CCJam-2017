@@ -1,12 +1,282 @@
--- WIRES: A ComputerCraft AsciiDots implementation
-
+----------------------------------------------------------------
+-- WIRES: An AsciiDots IDE for ComputerCraft
+--
 -- Copyright (C) 2017 InternetUnexplorer
 -- All rights reserved.
-
+--
 -- This software may be modified and distributed under the terms
 -- of the MIT license.  See the LICENSE file for details.
+----------------------------------------------------------------
 
-local worlds = {}
+local world
+
+------------------------------------------------
+-- Worlds
+------------------------------------------------
+
+local World = {}
+
+function World:new(file)
+	return setmetatable({
+		file = file,
+		lines = {},
+		starts = {},
+		warps = {},
+	}, {__index = World})
+end
+
+function World:updateLine(lineNum)
+	local line = self.lines[line]
+	local t = line.text
+	local s = {}
+	line.starts, line.warps, line.declaration = {}, {}
+
+	local i = 1
+
+	-- Declaration
+	if t[1] == "%" then
+		s[1] = "declaration"
+		s[2] = "declaration"
+
+		i = i + 3
+		-- Warp declaration
+		if t[2] == "$" then
+			line.declaration = {
+				type = "warp",
+				warpNames = {}
+			}
+			-- Add the warp names
+			while t[i] and t[i]:find "[A-Zb-z]" do
+				table.insert(declaration.warpNames, t[i])
+				s[i] = "declaration"
+				i = i + 1
+			end
+		-- Library declaration
+		elseif t[2] == "!" then
+			local name = {}
+			-- First get the name
+			while t[i] and t[i] ~= " " do
+				name[i-2] = t[i]
+				s[i] = "declaration"
+				i = i + 1
+			end
+			-- Next get the warp name
+			if t[i] == " " and t[i+1] and t[i+1]:find "[A-Zb-z]" then
+				s[i] = "whitespace"
+				i = i + 1
+				s[i] = "declaration"
+				line.declaration = {
+					type = "lib",
+					name = table.concat(name),
+					warpName = t[i]
+				}
+			else
+				s[i] = "invalid"
+			end
+		-- Library warp declaration
+		elseif t[2] == "^" then
+			if t[i] and t[i]:find "[A-Zb-z]" then
+				s[i] = "declaration"
+				line.declaration = {
+					type = "lib_warp",
+					warpName = t[i]
+				}
+			else
+				s[i] = "invalid"
+			end
+		-- Other (invalid) declaration
+		else
+			s[1] = "invalid"
+			s[2] = "invalid"
+		end
+	end
+
+	while i < #t do
+		local c = t[i]
+		-- Whitespace
+		if c == " " then
+			s[i] = "whitespace"
+		-- Comment
+		elseif c == "`" and t[i] == "`" then
+			-- Mark rest of line
+			repeat
+				s[i] = "comment"
+				i = i + 1
+			until i > #t
+		-- String
+		elseif c == "'" or c == '"' then
+			-- Mark rest of string
+			repeat
+				s[i] = "string"
+				i = i + 1
+			until t[i] == c or i > #t
+			-- Check whether we found a closing quote or hit EOL
+			s[i] = t[i] == c and "string" or "invalid"
+		-- Path
+		elseif c:find "[|%-/\\%+><%^v%(%)]" then
+			s[i] = "path"
+		-- Control
+		elseif c == "~" or c == "!" or c == "*" then
+			s[i] = "control"
+		-- Operation
+		elseif c == "[" and t[i+2] == "]"
+			or c == "{" and t[i+2] == "}" then
+			s[i]   = "operator_bound"
+			s[i+2] = "operator_bound"
+			-- Check if middle character is an operator
+			if (t[i+1] or ""):find "[%*%+%-%%%^/&!ox<>=\247\187\171\019]" then
+				s[i+1] = "operator"
+			else
+				s[i+1] = "invalid"
+			end
+			i = i + 2
+		-- Start
+		elseif c == "." or c == "\7" then
+			s[i] = "start"
+			table.insert(line.starts, i)
+		-- End
+		elseif c == "&" then
+			s[i] = "end"
+		-- Digit
+		elseif c:find "%d" then
+			s[i] = "digit"
+		-- Address & value
+		elseif c == "@" or c == "#" then
+			s[i] = "data"
+		-- IO
+		elseif c:find "[%?%$_a]" then
+			s[i] = "io"
+		-- Warp
+		elseif c:find "[A-Zb-z]" then
+			s[i] = "warp"
+			table.insert(line.warps, i)
+		-- Other (invalid) character
+		else
+			s[i] = "invalid"
+		end
+		i = i + 1
+	end
+
+	line.scopes = s
+	line.needsUpdate = false
+end
+
+function World:updateAll()
+	self.starts, self.warps, self.libWarp = {}, {}
+	local changedLines = {}
+
+	for i = 1, #self.lines do
+		local line = self.lines[i]
+		local changed = false
+
+		if line.needsUpdate then
+			self:updateLine(i)
+			changed = true
+		end
+
+		local function mark(xPos, scope)
+			if line.scopes[xPos] ~= scope then
+				line.scopes[warpXPos] = scope
+				changed = true
+			end
+		end
+
+		for j = 1, #line.starts do
+			table.insert(self.starts, {
+				x = line.starts[j],
+				y = i
+			})
+		end
+
+		if line.declaration then
+			local declaration = line.declaration
+
+			if declaration.type == "warp" then
+				for j = 1, #declaration.warpNames do
+					local warpName = declaration.warpNames[j]
+					local warpXPos = j + 2 -- %$
+
+					if self.warps[warpName] then
+						-- Warp already declared
+						mark(warpXPos, "invalid")
+					else
+						-- Create a table for this warp and add the
+						-- declaration as the first element
+						self.warps[warpName] = {{
+							x = warpXPos,
+							y = i
+						}}
+						mark(warpXPos, "warp")
+					end
+				end
+			elseif declaration.type == "lib" then
+				local name = declaration.name
+				local warpName = declaration.warpName
+				local warpXPos = 2 + name:len() + 1 -- %!, name, and a space
+
+				if self.warps[warpName] then
+					mark(warpXPos, "invalid")
+				else
+					self.libs[name] = self.libs[name] or {}
+					self.warps[warpName] = {
+						lib = libName,
+						{
+							x = warpXPos,
+							y = i
+						}
+					}
+					mark(warpXPos, "warp")
+				end
+			elseif declaration.type == "lib_warp" then
+				local warpName = declaration.warpName
+				local warpXPos = j + 2 -- %^
+
+				if self.libWarp or self.warps[warpName] then
+					mark(warpXPos, "invalid")
+				else
+					self.libWarp = {
+						libWarp = true,
+						{
+							x = warpXPos,
+							y = i
+						}
+					}
+					self.warps[warpName] = self.libWarp
+					mark(warpXPos, "warp")
+				end
+			end
+		end
+
+		for j = 1, #line.warps do
+			local warpXPos = line.warps[j]
+			local warpName = line.text[warpXPos]
+
+			if self.warps[warpName] then
+				local warp = self.warps[warpName]
+
+				-- If it is a lib warp, it cannot have been seen
+				-- anywhere (other than its declaration) already
+				if not warp.libWarp or #warp < 2 then
+					mark(warpXPos, "warp")
+				else
+					mark(warpXPos, "invalid")
+				end
+			else
+				-- Warp doesn't exist
+				mark(warpXPos, "invalid")
+			end
+		end
+
+		if changed then
+			table.insert(changedLines, i)
+		end
+	end
+
+	return changedLines
+end
+
+--------------------------------
+
 
 -- local world, scopes
 
