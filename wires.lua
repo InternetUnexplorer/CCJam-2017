@@ -8,36 +8,43 @@
 -- of the MIT license.  See the LICENSE file for details.
 ----------------------------------------------------------------
 
-local world
+local worlds, currentWorld, currentWorldIndex
+
+------------------------------------------------
+local World, status, theme, editor, focus, mode
+------------------------------------------------
 
 ------------------------------------------------
 -- Worlds
 ------------------------------------------------
 
-local World = {}
+World = {}
 
-function World.open(filename, parent)
+function World.open(filepath)
 	local world = {
 		lines  = {},
 		warps  = {},
 		starts = {},
+		libs   = {},
 
-		filename = filename,
 		parent   = parent,
+		filepath = filepath,
 
 		cursorX = 1, cursorY = 1,
-		cameraX = 1, cameraY = 1,
+		cameraX = 0, cameraY = 0,
 
-		modified = false
+		loaded       = true,
+		needsUpdate  = true,
+		modified     = false,
 	}
 
-	if filename and fs.exists(filename) then
-		world.isReadOnly = fs.isReadOnly(filename)
+	if filepath and fs.exists(filepath) then
+		world.isReadOnly = fs.isReadOnly(filepath)
 		
-		local f = fs.open(filename, "r")
+		local f = fs.open(filepath, "r")
 
 		if not f then
-			return nil, "Cannot open file: "..filename
+			return nil, "Cannot open file: "..filepath
 		end
 
 		for l in f.readLine do
@@ -62,7 +69,7 @@ function World.open(filename, parent)
 end
 
 function World:updateLine(lineNum)
-	local line = self.lines[line]
+	local line = self.lines[lineNum]
 	local t = line.text
 	local s = {}
 	line.starts, line.warps, line.declaration = {}, {}
@@ -74,7 +81,7 @@ function World:updateLine(lineNum)
 		s[1] = "declaration"
 		s[2] = "declaration"
 
-		i = i + 3
+		i = i + 2
 		-- Warp declaration
 		if t[2] == "$" then
 			line.declaration = {
@@ -83,7 +90,7 @@ function World:updateLine(lineNum)
 			}
 			-- Add the warp names
 			while t[i] and t[i]:find "[A-Zb-z]" do
-				table.insert(declaration.warpNames, t[i])
+				table.insert(line.declaration.warpNames, t[i])
 				s[i] = "declaration"
 				i = i + 1
 			end
@@ -99,16 +106,16 @@ function World:updateLine(lineNum)
 			-- Next get the warp name
 			if t[i] == " " and t[i+1] and t[i+1]:find "[A-Zb-z]" then
 				s[i] = "whitespace"
-				i = i + 1
-				s[i] = "declaration"
+				s[i+1] = "declaration"
 				line.declaration = {
 					type = "lib",
 					name = table.concat(name),
-					warpName = t[i]
+					warpName = t[i+1]
 				}
 			else
-				s[i] = "invalid"
+				s[i+1] = "invalid"
 			end
+			i = i + 2
 		-- Library warp declaration
 		elseif t[2] == "^" then
 			if t[i] and t[i]:find "[A-Zb-z]" then
@@ -120,6 +127,7 @@ function World:updateLine(lineNum)
 			else
 				s[i] = "invalid"
 			end
+			i = i + 1
 		-- Other (invalid) declaration
 		else
 			s[1] = "invalid"
@@ -127,13 +135,13 @@ function World:updateLine(lineNum)
 		end
 	end
 
-	while i < #t do
+	while i <= #t do
 		local c = t[i]
 		-- Whitespace
 		if c == " " then
 			s[i] = "whitespace"
 		-- Comment
-		elseif c == "`" and t[i] == "`" then
+		elseif c == "`" and t[i+1] == "`" then
 			-- Mark rest of line
 			repeat
 				s[i] = "comment"
@@ -212,7 +220,7 @@ function World:updateAll()
 
 		local function mark(xPos, scope)
 			if line.scopes[xPos] ~= scope then
-				line.scopes[warpXPos] = scope
+				line.scopes[xPos] = scope
 				changed = true
 			end
 		end
@@ -242,30 +250,30 @@ function World:updateAll()
 							x = warpXPos,
 							y = i
 						}}
-						mark(warpXPos, "warp")
+						mark(warpXPos, "declaration")
 					end
 				end
 			elseif declaration.type == "lib" then
-				local name = declaration.name
+				local filepath = shell.resolve(declaration.name)
 				local warpName = declaration.warpName
-				local warpXPos = 2 + name:len() + 1 -- %!, name, and a space
+				local warpXPos = filepath:len() + 4 -- %!, name, and a space
 
 				if self.warps[warpName] then
 					mark(warpXPos, "invalid")
 				else
-					self.libs[name] = self.libs[name] or name
+					self.libs[filepath] = true
 					self.warps[warpName] = {
-						lib = libName,
+						lib = filepath,
 						{
 							x = warpXPos,
 							y = i
 						}
 					}
-					mark(warpXPos, "warp")
+					mark(warpXPos, "declaration")
 				end
 			elseif declaration.type == "lib_warp" then
 				local warpName = declaration.warpName
-				local warpXPos = j + 2 -- %^
+				local warpXPos = 3 -- %^
 
 				if self.libWarp or self.warps[warpName] then
 					mark(warpXPos, "invalid")
@@ -278,7 +286,7 @@ function World:updateAll()
 						}
 					}
 					self.warps[warpName] = self.libWarp
-					mark(warpXPos, "warp")
+					mark(warpXPos, "declaration")
 				end
 			end
 		end
@@ -292,7 +300,12 @@ function World:updateAll()
 
 				-- If it is a lib warp, it cannot have been seen
 				-- anywhere (other than its declaration) already
-				if not warp.libWarp or #warp < 2 then
+				if not warp.libWarp or #warp == 1 then
+					table.insert(warp, {
+						x = warpXPos,
+						y = i
+					})
+					--sleep(100)
 					mark(warpXPos, "warp")
 				else
 					mark(warpXPos, "invalid")
@@ -308,10 +321,207 @@ function World:updateAll()
 		end
 	end
 
+	self.needsUpdate = false
+
 	return changedLines
 end
 
 ------------------------------------------------
+-- Status Bar
+------------------------------------------------
+
+status = {
+	messages = {}
+}
+
+function status.draw()
+	local term  = status.window
+	local width = term.getSize()
+
+	term.setCursorPos(1, 1)
+	term.clearLine()
+
+	if #status.messages > 0 then
+		local message, text = status.messages[1]
+		if message.error then
+			text = "\215 "..message.text
+		else
+			text = message.text
+		end
+		if text:len() > width then
+			text = text:sub(1, width - 1).."\187"
+		end
+		term.write(text)
+	else
+
+	end
+end
+
+------------------------------------------------
+-- Theme
+------------------------------------------------
+
+-- TODO: Update to new theme system
+theme = {
+	["default"]        = { fg = "0", bg = "f" },
+	["declaration"]    = { fg = "9" },
+	["comment"]        = { fg = "d" },
+	["string"]         = { fg = "d" },
+	["control"]        = { fg = "2" },
+	["operator_bound"] = { fg = "8" },
+	["operator"]       = { fg = "2" },
+	["start"]          = { fg = "3" },
+	["end"]            = { fg = "3" },
+	["digit"]          = { fg = "4" },
+	["data"]           = { fg = "3" },
+	["io"]             = { fg = "3" },
+	["warp"]           = { fg = "3" },
+	["invalid"]        = { fg = "e" },
+
+	["cursor"]         = { fg = "f", bg = "0" },
+}
+
+------------------------------------------------
+-- Editor
+------------------------------------------------
+
+editor = {}
+
+function editor.draw()
+	local world = currentWorld
+	local term = editor.window
+	local width, height = term.getSize()
+	local camX, camY = world.cameraX, world.cameraY
+	local buffer = {}
+
+	for y = 1, math.min(height-1, #world.lines-camY) do
+		local line, tx, fg, bg = world.lines[y+camY], {}, {}, {}
+		for x = 1, math.min(width, #line.text-camX) do
+			local s = line.scopes[x+camX]
+			tx[x] = line.text[x+camX]
+			fg[x] = (theme[s] or {}).fg or theme.default.fg
+			bg[x] = (theme[s] or {}).bg or theme.default.bg
+		end
+		buffer[y] = { tx = tx, fg = fg, bg = bg }
+	end
+
+	term.clear()
+	for y = 1, #buffer do
+		term.setCursorPos(1, y)
+		term.blit(table.concat(buffer[y].tx)
+		         ,table.concat(buffer[y].fg)
+		         ,table.concat(buffer[y].bg))
+	end
+
+	if focus == "editor" and mode == "edit" then
+		term.setCursorPos(world.cursorX-camX, world.cursorY-camY)
+	end
+end
+
+
+function editor.rescanLibs()
+	local inUse = {}
+
+	local function addLibs(world)
+		if world.needsUpdate then
+			world:updateAll()
+		end
+		for filepath, _ in pairs(world.libs) do
+			if not inUse[filepath] then
+				inUse[filepath] = true
+				if not worlds[filepath] then
+					local lib, msg = World.open(filepath)
+					if lib then
+						editor.addWorld(lib)
+					else
+						return
+					end
+				end
+				addLibs(lib)
+			end
+		end
+	end
+
+	addLibs(worlds[1])
+
+	-- Remove all of the unused worlds
+	local i = 2
+	while i < #worlds do
+		local world = worlds[i]
+		if not inUse[world.filepath] and not world.modified then
+			-- TODO: Replace with editor.closeWorld?
+			editor.removeWorldByIndex(i)
+		end
+	end
+end
+
+function editor.addWorld(world)
+	table.insert(worlds, world)
+	worlds[world.filepath] = world
+end
+
+function editor.getWorldByFilepath(filepath)
+	return worlds[filepath]
+end
+
+function editor.getWorldByIndex(index)
+	return worlds[index]
+end
+
+function editor.removeWorldByFilepath(filepath) 
+	for i = 1, #worlds do
+		if worlds[i] == worlds[filepath] then
+			table.remove(worlds, i)
+		end
+	end
+	worlds[filepath] = nil
+end
+
+function editor.removeWorldByIndex(index)
+	worlds[worlds[index].filepath] = nil
+	table.remove(worlds, index)
+end
+
+function editor.closeWorld(index)
+	if worlds[index].modified then
+		-- Switch tab and prompt
+	else
+		-- Close
+	end
+end
+
+function editor.takeFocus()
+	focus = "editor"
+	editor.window.restoreCursor()
+	editor.window.setCursorBlink(mode == "edit")
+end
+
+------------------------------------------------
+-- Argument Parsing / Main Logic
+------------------------------------------------
+
+-- Testing :)
+
+local args = {...}
+
+-- Set up windows
+local width, height = term.getSize()
+editor.window = window.create(term.current(), 1, 1, width, height-1)
+status.window = window.create(term.current(), 1, height, width, 1)
+
+focus, mode = "editor", "edit"
+
+worlds = {
+	World.open "world.dots"
+}
+currentWorldIndex = 1
+currentWorld = worlds[currentWorldIndex]
+
+currentWorld:updateAll()
+
+editor.takeFocus()
+
+editor.draw()
 
 -- local world, scopes
 
