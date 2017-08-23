@@ -11,7 +11,7 @@
 local worlds, currentWorld, currentWorldIndex
 
 ----------------------------------------------------------------
-local World, tabs, status, theme, editor, focus, mode
+local World, tabs, status, theme, editor, focus, mode, program
 ----------------------------------------------------------------
 
 ------------------------------------------------
@@ -351,8 +351,25 @@ theme = {
 	tabs = {
 		["selected"] = { fg = "0", bg = "f" },
 		["normal"]   = { fg = "f", bg = "7" },
+	},
+	status = {
+		["view_mode"] = { fg = "0", bg = "f" },
+		["edit_mode"] = { fg = "0", bg = "f" },
+		["prompt"]    = { fg = "f", bg = "0" },
+		["info_msg"]  = { fg = "0", bg = "f" },
+		["error_msg"] = { fg = "0", bg = "e" },
 	}
 }
+
+function theme.toDecimal(hexColor)
+	return math.pow(2, tonumber(hexColor, 16))
+end
+
+------------------------------------------------
+-- Program
+------------------------------------------------
+
+program = {}
 
 ------------------------------------------------
 -- Tab Bar
@@ -433,30 +450,194 @@ end
 ------------------------------------------------
 
 status = {
-	messages = {}
+	messages = {},
+	mode = "normal",
 }
 
 function status.draw()
 	local term  = status.window
 	local width = term.getSize()
 
-	term.setCursorPos(1, 1)
-	term.clearLine()
+	local text, color
 
-	if #status.messages > 0 then
-		local message, text = status.messages[1]
-		if message.error then
-			text = "\215 "..message.text
+	if status.mode == "message" then
+		local msg = status.messages[1]
+		if msg.isError then
+			color = theme.status.error_msg
+			text  = "\215"..msg.text
 		else
-			text = message.text
+			color = theme.status.info_msg
+			text  = "\004"..msg.text
 		end
 		if text:len() > width then
-			text = text:sub(1, width - 1).."\187"
+			text = text:sub(1, width-1).."\187"
 		end
-		term.write(text)
-	else
+	elseif status.mode == "prompt" then
+		color = theme.status.prompt
+		local prompt = status.prompt
+		local camX, curX = prompt.cameraX, prompt.cursorX
+		local pText, pBuf = prompt.text, prompt.buffer
+		if curX < 1 then
+			curX = 1
+		elseif curX > #pBuf+1 then
+			curX = #pBuf+1
+		end
+		if camX >= curX then
+			camX = curX - 1
+		elseif curX > camX + width - pText:len() then
+			camX = curX - width + pText:len()
+		end
+		prompt.cameraX, prompt.cursorX = camX, curX
+		local x1, x2 = camX+1, math.min(width+camX-pText:len(), #pBuf)
+		text = pText..table.concat(pBuf, "", x1, x2)
+	elseif status.mode == "normal" then
+		local rText, lText
+		
+		if mode == "view" then
+			rText = (program.isRunning and " RUNNING" or " READY")
+			color = theme.status.view_mode
+		else
+			rText = (editor.isReplace and " REPLACE" or " INSERT")
+			color = theme.status.edit_mode
+		end
 
+		if currentWorld.filepath then
+			local filename, filemods = fs.getName(currentWorld.filepath)
+			if currentWorld.isNewFile then
+				filemods = " [New File]"
+			elseif currentWorld.isReadOnly then
+				filemods = " [Read-Only]"
+			end
+			local maxFLen = width - rText:len() - 2 - (filemods or ""):len()
+			if filename:len() > maxFLen then
+				filename = filename:sub(1, maxFLen-3).."..."
+			end
+			lText = '"'..filename..'"'..(filemods or "")
+		else
+			lText = "[New File]"
+		end
+
+		if lText:len() + rText:len() < width then
+			lText = lText..string.rep(" ", width-lText:len()-rText:len())
+		end
+		text = lText..rText
 	end
+	term.setCursorPos(1, 1)
+	term.setTextColor(theme.toDecimal(color.fg))
+	term.setBackgroundColor(theme.toDecimal(color.bg))
+	term.clearLine()
+	term.write(text)
+	if status.mode == "prompt" then
+		local prompt = status.prompt
+		term.setCursorPos(prompt.cursorX-prompt.cameraX+prompt.text:len(), 1)
+	end
+end
+
+function status.handleEvent(event, p1, p2, p3)
+	if status.mode == "prompt" then
+		local prompt = status.prompt
+		if event == "key" then
+			-- Cursor movement
+			if p1 == keys.right then
+				prompt.cursorX = prompt.cursorX + 1
+			elseif p1 == keys.left then
+				prompt.cursorX = prompt.cursorX - 1
+			elseif p1 == keys.home then
+				prompt.cursorX = 1
+			elseif p1 == keys["end"] then
+				prompt.cursorX = #prompt.buffer + 1
+			-- Backspace and delete
+			elseif p1 == keys.backspace then
+				if #prompt.buffer > 0 then
+					if prompt.buffer[prompt.cursorX-1] then
+						table.remove(prompt.buffer, prompt.cursorX-1)
+						prompt.cursorX = prompt.cursorX - 1
+					end
+				else
+					status.closePrompt(false)
+				end
+			elseif p1 == keys.delete then
+				if prompt.buffer[prompt.cursorX] then
+					table.remove(prompt.buffer, prompt.cursorX)
+				end
+			-- Enter and cancel (for emulators)
+			elseif p1 == keys.enter then
+				status.closePrompt(true)
+			elseif p1 == keys.escape then
+				status.closePrompt(false)
+			end
+			status.draw()
+		elseif event == "char" then
+			table.insert(prompt.buffer, prompt.cursorX, p1)
+			prompt.cursorX = prompt.cursorX + 1
+			status.draw()
+		end
+	end
+end
+
+function status.closePrompt(submit)
+	if submit and status.prompt.onSubmit then
+		status.prompt.onSubmit(table.concat(status.prompt.buffer))
+	elseif not submit and status.prompt.onCancel then
+		status.prompt.onCancel()
+	end
+	status.prompt = nil
+	status.messages = {}
+	status.mode = "normal"
+	status.draw()
+end
+
+function status.prompt(promptText, onCancel, onSubmit)
+	status.mode = "prompt"
+	status.prompt = {
+		text = promptText,
+		buffer = {},
+		cameraX = 1,
+		cursorX = 1,
+		onCancel = onCancel,
+		onSubmit = onSubmit
+	}
+	status.takeFocus()
+	status.draw()
+end
+
+function status.error(text)
+	status.msg(text, true)
+end
+
+function status.info(text)
+	status.msg(text, false)
+end
+
+function status.msg(text, isError)
+	table.insert(status.messages, {
+		text = text,
+		isError = isError
+	})
+	if status.mode == "normal" then
+		status.mode = "message"
+		status.draw()
+	end
+end
+
+function status.nextMessage()
+	table.remove(status.messages)
+	if #status.messages == 0 then
+		status.mode = "normal"
+		status.draw()
+	end
+end
+
+function status.clearMessages()
+	status.messages = {}
+	status.mode = "normal"
+	status.draw()
+end
+
+function status.takeFocus()
+	focus = "status"
+	status.window.restoreCursor()
+	status.window.setCursorBlink(status.mode == "prompt")
 end
 
 ------------------------------------------------
@@ -526,9 +707,11 @@ function editor.rescanLibs()
 	local i = 2
 	while i <= #worlds do
 		local world = worlds[i]
-		if not inUse[world.filepath] and not world.modified then
-			-- TODO: Replace with editor.closeWorld?
-			editor.removeWorldByIndex(i)
+		if world.filepath and not inUse[world.filepath] then
+			if not world.modified then
+				-- TODO: Replace with editor.closeWorld?
+				editor.removeWorldByIndex(i)
+			end
 		else
 			i = i + 1
 		end
@@ -570,7 +753,7 @@ function editor.closeWorld(index)
 
 end
 
-function editor.handleEvent(e, p1, p2, p3)
+function editor.handleEvent(event, p1, p2, p3)
 
 end
 
@@ -585,3 +768,6 @@ end
 ------------------------------------------------
 
 local args = {...}
+
+local showHelp = false
+local fileList = {}
