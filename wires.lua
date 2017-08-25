@@ -11,7 +11,7 @@
 local worlds, currentWorld, currentWorldIndex
 
 ----------------------------------------------------------------
-local World, Dot, tabs, status, theme, editor, focus, mode, program, key
+local World, Dot, tabs, status, theme, editor, focus, program
 ----------------------------------------------------------------
 
 ------------------------------------------------
@@ -23,7 +23,7 @@ World = {}
 -- Opens a world
 -- If a filepath is specified, the world will be loaded from that file, and
 -- if the save is successful, the world's filepath will be updated
--- If the file exists but cannot be loaded, nil and and error message will be
+-- If the file exists but cannot be loaded, nil and the error message will be
 -- returned
 -- If no filepath is specified, or if the file does not exist, a
 -- blank world will be returned
@@ -48,6 +48,10 @@ function World.open(filepath)
 	if filepath and fs.exists(filepath) then
 		world.isReadOnly = fs.isReadOnly(filepath)
 		
+		if fs.isDir(filepath) then
+			return false, "File is a directory"
+		end
+
 		local f = fs.open(filepath, "r")
 
 		if not f then
@@ -70,6 +74,11 @@ function World.open(filepath)
 		f.close()
 	else
 		world.isNewFile = true
+		-- Worlds need to have at least one line, so add a blank one
+		world.lines[1] = {
+			text = {},
+			needsUpdate = true
+		}
 	end
 
 	return setmetatable(world, {__index = World})
@@ -252,7 +261,7 @@ end
 -- Updates the scopes and indexes for all of the lines in a world
 -- Returns a list of line numbers for the lines which were changed
 function World:updateAll()
-	self.starts, self.warps, self.libs, self.libWarp = {}, {}, {}
+	self.starts, self.warps, self.libWarp = {}, {}
 	local changedLines = {}
 
 	for i = 1, #self.lines do
@@ -307,7 +316,6 @@ function World:updateAll()
 				if self.warps[warpName] then
 					mark(warpXPos, "invalid")
 				else
-					self.libs[filepath] = true
 					self.warps[warpName] = {
 						lib = filepath,
 						{
@@ -400,12 +408,13 @@ theme = {
 		["normal"]   = { fg = "f", bg = "7" },
 	},
 	status = {
-		["view_mode"] = { fg = "0", bg = "f" },
-		["edit_mode"] = { fg = "0", bg = "f" },
-		["prompt"]    = { fg = "f", bg = "0" },
-		["info_msg"]  = { fg = "0", bg = "f" },
-		["error_msg"] = { fg = "0", bg = "e" },
-		["confirm"]   = { fg = "0", bg = "1" },
+		["default"]   = { fg = "0", bg = "f" },
+		["view_mode"] = {},
+		["edit_mode"] = {},
+		["prompt"]    = {},
+		["info_msg"]  = { fg = "5" },
+		["error_msg"] = { fg = "e" },
+		["confirm"]   = { fg = "4" },
 	}
 }
 
@@ -420,136 +429,15 @@ end
 
 Dot = {}
 
+-- Creates a new dot
 function Dot:new(world, x, y)
 	return setmetatable({
 		world = world,
 		x = x,
 		y = y,
-		warpStack = {}
 	}, {
 		__index = Dot
 	})
-end
-
-function Dot:step()
-	-- Starting (no direction yet)
-	if not self.dir then
-		if self:charAt(0, -1) == "|" then
-			self.dir = { x = 0, y = -1 }
-		elseif self:charAt(0, 1) == "|" then
-			self.dir = { x = 0, y = 1 }
-		elseif self:charAt(-1, 0) == "-" then
-			self.dir = { x = -1, y = 0 }
-		elseif self:charAt(1, 0) == "-" then
-			self.dir = { x = 1, y = 0 }
-		else
-			self:die("No start")
-		end
-	-- Waiting
-	elseif self.waiting then
-
-	-- Moving
-	else
-		local char, scope = self:charAt()
-		-- Nothing
-		if not char then
-			self:die()
-		-- Right Mirror
-		elseif char == "/" then
-			self:move()
-			self.dir.x, self.dir.y = self.dir.y, self.dir.x
-		-- Left Mirror
-		elseif char == "\\" then
-			self:move()
-			self.dir.x, self.dir.y = -self.dir.y, -self.dir.x
-		-- Junction
-		elseif char == "+" then
-			self:move()
-		-- Warp
-		elseif self.world.warps[char] then
-			local warp = self.world.warps[char]
-			-- Warp to library
-			if warp.lib then
-				local lib = warp.lib
-				if lib.loaded and lib.libWarp then
-					table.insert(self.warpStack, {
-						world = self.world,
-						warpX = self.x,
-						warpY = self.y
-					})
-				else
-					self:die()
-				end
-			-- Warp from library
-			elseif warp.libWarp then
-				if #self.warpStack == 0 then
-					-- No world to go back to D;
-					self:die()
-				else
-					local elem = table.remove(self.warpStack)
-					self.world = elem.world
-					self.x, self.y = elem.warpX, elem.warpY
-				end
-			-- Regular warp
-			else
-				if #warp == 3 then
-					-- Go to the other location
-					if warp[2].x ~= self.x and warp[2].y ~= self.y then
-						self.x, self.y = warp[2].x, warp[2].y
-					else
-						self.x, self.y = warp[3].x, warp[3].y
-					end
-				else
-					-- Either too many or too few locations
-					self:die()
-				end
-			end
-		-- Horizontal symbols
-		elseif self.dir.x ~= 0 then
-			if char == "-" then
-				self:move()
-			elseif char == "^" or char == "v" then
-				self:move()
-				self.dir = { x = 0, y = char == "^" and 1 or -1 }
-			elseif char == "(" or char == ")" then
-				self:move()
-				self.dir = { x = char == "(" and 1 or -1, y = 0 }
-			else
-				self:die()
-			end
-		-- Vertical symbols
-		else
-
-		end
-	end
-end
-
-function Dot:move()
-	self.x = self.x + self.dir.x
-	self.y = self.y + self.dir.y
-end
-
-function Dot:charAt(deltaX, deltaY, includeString)
-	deltaX, deltaY = deltaX or self.dir.x, deltaY or self.dir.y
-	if self.world.lines[self.y+deltaY] then
-		local line = self.world.lines[self.y+deltaY]
-		local scope = line.scopes[self.y+deltaY]
-		if scope ~= "comment" and scope ~= "invalid"
-		and scope ~= "declaration" and scope ~= "whitespace"
-		and (includeString or scope ~= "string") then
-			return line.text[self.x+deltaX], scope
-		end
-	end
-end
-
-function Dot:die(msg)
-	error("x: "..self.x..", y: "..self.y..", msg: "..(msg or "<nil>"))
-	for i = 1, #self.world.dots do
-		if self.world.dots[i] == self then
-			table.remove(self.world.dots, i)
-			break
-		end
-	end
 end
 
 ------------------------------------------------
@@ -558,27 +446,14 @@ end
 
 program = {}
 
-function program.start()
-	editor.rescanLibs()
-	for i = 1, #worlds do
-		local world = worlds[i]
-		world.dots = {}
-		for j = 1, #world.starts do
-			local start = world.starts[j]
-			table.insert(world.dots, Dot:new(world, start.x, start.y))
-		end
-	end
-	program.isRunning = true
+-- Starts the program
+function program.run()
+
 end
 
-function program.step()
-	for i = 1, #worlds[1].dots do
-		worlds[1].dots[i]:step()
-	end
-end
+-- Halts the program
+function program.halt()
 
-function program.stop()
-	program.isRunning = false
 end
 
 ------------------------------------------------
@@ -599,25 +474,22 @@ function tabs.draw()
 	local tx, fg, bg = {}, {}, {}
 
 	for i = 1, #worlds do
-		local text = tabs.getTabText(i)
-		local fgColor, bgColor
+		local text, color = tabs.getTabText(i)
 		if i == currentWorldIndex then
 			if #tx - camX + text:len() > width then
-				camX = width - text:len()
+				camX = #tx - text:len()
 			end
 			if #tx < camX-1 then
 				camX = #tx-1
 			end
-			fgColor = theme.tabs.selected.fg
-			bgColor = theme.tabs.selected.bg
+			color = theme.tabs.selected
 		else
-			fgColor = theme.tabs.normal.fg
-			bgColor = theme.tabs.normal.bg
+			color = theme.tabs.normal
 		end
 		for j = 1, text:len() do
 			table.insert(tx, text:sub(j, j))
-			table.insert(fg, fgColor)
-			table.insert(bg, bgColor)
+			table.insert(fg, color.fg)
+			table.insert(bg, color.bg)
 		end
 	end
 
@@ -640,7 +512,7 @@ function tabs.draw()
 	         ,table.concat(bg, "", camX+1, width+camX))
 end
 
--- Returns the text for the tab at index index
+-- Returns the text for the tab at index
 function tabs.getTabText(index)
 	local world = worlds[index]
 	return " "
@@ -649,12 +521,18 @@ function tabs.getTabText(index)
 		.." "
 end
 
--- Switches to the tab at index index
+-- Cycles to the next tab
+function tabs.nextTab()
+	tabs.switch(currentWorldIndex < #worlds and currentWorldIndex + 1 or 1)
+end
+
+-- Switches to the tab at index
 function tabs.switch(index)
 	currentWorldIndex = math.min(#worlds, math.max(index, 1))
 	currentWorld = worlds[currentWorldIndex]
 	tabs.needsDraw = true
 	editor.needsDraw = true
+	status.clearMessages()
 end
 
 ------------------------------------------------
@@ -675,14 +553,12 @@ function status.draw()
 
 	if status.mode == "message" then
 		local msg = status.messages[1]
-		-- Set color and add glyphs
 		if msg.isError then
 			color = theme.status.error_msg
-			text  = "\215 "..msg.text
 		else
 			color = theme.status.info_msg
-			text  = msg.text
 		end
+		text = msg.text
 		-- Truncate message if it is too long
 		if text:len() > width then
 			text = text:sub(1, width-3).."..."
@@ -695,7 +571,7 @@ function status.draw()
 		else
 			color = theme.status.prompt
 			local camX, curX = prompt.cameraX, prompt.cursorX
-			local pText, pBuf = prompt.text, prompt.buffer
+			local pText, pBuf = prompt.text..": ", prompt.buffer
 			-- Bound the cursor
 			if curX < 1 then
 				curX = 1
@@ -714,13 +590,10 @@ function status.draw()
 			local x1, x2 = camX+1, math.min(width+camX-pText:len(), #pBuf)
 			text = pText..table.concat(pBuf, "", x1, x2)
 		end
-	elseif status.mode == "confirm" then
-		text  = status.confirm.text.." (y/n)"
-		color = theme.status.confirm
 	elseif status.mode == "normal" then
 		local rText, lText
 		-- Get the mode text
-		if mode == "view" then
+		if editor.mode == "view" then
 			rText = (program.isRunning and " RUNNING" or " READY")
 			color = theme.status.view_mode
 		else
@@ -750,16 +623,18 @@ function status.draw()
 		end
 		text = lText..rText
 	end
+	local fgColor = (color or {}).fg or theme.status.default.fg
+	local bgColor = (color or {}).bg or theme.status.default.bg
 	-- Draw the text
 	term.setCursorPos(1, 1)
-	term.setTextColor(theme.toDecimal(color.fg))
-	term.setBackgroundColor(theme.toDecimal(color.bg))
+	term.setTextColor(theme.toDecimal(fgColor))
+	term.setBackgroundColor(theme.toDecimal(bgColor))
 	term.clearLine()
 	term.write(text)
 end
 
 -- Handles events when the status bar is focused
-function status.handleEvent(event, p1, p2, p3, shiftDown, ctrlDown, altDown)
+function status.handleEvent(event, p1, p2, p3, shiftDown, ctrlDown)
 	if status.mode == "prompt" then
 		local p = status.prompt
 		if p.isConfirm then
@@ -821,18 +696,11 @@ function status.closePrompt(submit)
 	local prompt = status.prompt
 	status.prompt = nil
 	status.clearMessages()
+	focus = prompt.returnFocus
 	if submit and prompt.onSubmit then
 		prompt.onSubmit(not prompt.isConfirm and table.concat(prompt.buffer))
 	elseif not submit and prompt.onCancel then
 		prompt.onCancel()
-	end
-	-- If the onSubmit or onCancel functions opened another prompt then pass
-	-- it our returnFocus instead of returning the focus
-	-- If we don't do this then the focus may be returned while in a prompt!
-	if status.prompt then
-		status.prompt.returnFocus = prompt.returnFocus
-	else
-		focus = prompt.returnFocus
 	end
 end
 
@@ -876,6 +744,7 @@ function status.msg(text, isError)
 	})
 	if status.mode == "normal" then
 		status.mode = "message"
+		status.resetMessageTimer()
 		status.needsDraw = true
 	end
 end
@@ -886,6 +755,8 @@ function status.nextMessage()
 	table.remove(status.messages)
 	if #status.messages == 0 then
 		status.mode = "normal"
+	else
+		status.resetMessageTimer()
 	end
 	status.needsDraw = true
 end
@@ -893,8 +764,14 @@ end
 -- Clears all of the messages in the queue and sets the mode back to normal
 function status.clearMessages()
 	status.messages = {}
+	status.messageTimer = nil
 	status.mode = "normal"
 	status.needsDraw = true
+end
+
+-- Starts a new timer for the current message
+function status.resetMessageTimer()
+	status.messageTimer = os.startTimer(2)
 end
 
 -- Grabs the cursor, as it may have been moved while drawing other areas of
@@ -904,7 +781,7 @@ function status.grabCursor()
 		status.window.restoreCursor()
 		status.window.setCursorBlink(true)
 		local p = status.prompt
-		status.window.setCursorPos(p.cursorX - p.cameraX + p.text:len(), 1)
+		status.window.setCursorPos(p.cursorX-p.cameraX+p.text:len()+2, 1)
 	else
 		status.window.setCursorBlink(false)
 	end
@@ -914,7 +791,9 @@ end
 -- Editor
 ------------------------------------------------
 
-editor = {}
+editor = {
+	mode = "view"
+}
 
 -- Draws the current world to the window
 function editor.draw()
@@ -962,76 +841,39 @@ function editor.draw()
 	end
 end
 
--- Loads worlds which are required but not yet loaded, and removes worlds
--- which are no longer required and have not been modified
-function editor.rescanLibs()
-	local inUse = {}
-
-	local function addLibs(world)
-		-- Update the world first
-		if world.needsUpdate then
-			world:updateAll()
-		end
-		-- Iterate through each of the libs this world uses
-		for filepath, _ in pairs(world.libs) do
-			if not inUse[filepath] then
-				inUse[filepath] = true
-				if not worlds[filepath] then
-					-- World not loaded yet, load it here
-					local lib, msg = World.open(filepath)
-					if lib then
-						editor.addWorld(lib)
-					else
-						-- Loading failed
-						return
-					end
-				end
-				-- Check libs for this world
-				addLibs(worlds[filepath])
-			end
-		end
-	end
-
-	-- Add the libraries used by the first world
-	addLibs(worlds[1])
-
-	-- Remove all of the unused worlds
-	local i = 2
-	while i <= #worlds do
-		local world = worlds[i]
-		if world.filepath and not inUse[world.filepath] then
-			if not world.modified then
-				editor.closeWorld(i)
-			end
-		else
-			i = i + 1
-		end
-	end
-end
-
 -- Adds a world to the worlds table
+-- If the current world is not modified and a new file, it will be replaced
+-- Otherwise, the world will be added as a new tab
 function editor.addWorld(world)
-	table.insert(worlds, world)
-	if world.filepath then
-		worlds[world.filepath] = world
+	if currentWorld.isNewFile and not currentWorld.modified then
+		worlds[currentWorldIndex] = world
+		tabs.switch(currentWorldIndex)
+	else
+		table.insert(worlds, world)
+		if world.filepath then
+			worlds[world.filepath] = world
+		end
+		tabs.switch(#worlds)
 	end
 end
 
--- Returns the world with filepath filepath in the worlds table
+-- Returns the world with filepath in the worlds table
 function editor.getWorldByFilepath(filepath)
 	return worlds[filepath]
 end
 
--- Returns the world at index index in the worlds table
+-- Returns the world at index in the worlds table
 function editor.getWorldByIndex(index)
 	return worlds[index]
 end
 
 -- Removes a world from the worlds table by its filepath
+-- Note that this does not update the tabs, editor, or status
 function editor.removeWorldByFilepath(filepath) 
 	for i = 1, #worlds do
 		if worlds[i] == worlds[filepath] then
 			table.remove(worlds, i)
+			break
 		end
 	end
 	worlds[filepath] = nil
@@ -1045,10 +887,60 @@ function editor.removeWorldByIndex(index)
 	table.remove(worlds, index)
 end
 
--- Closes the world at index index, prompting the user if the world has
--- unsaved changes
-function editor.closeWorld(index)
 
+-- Opens a new world
+function editor.new()
+	editor.addWorld(World.open())
+end
+
+-- Opens the world with filename, or prompts for a filename if none is
+-- provided
+function editor.open(filename)
+	local function load(filename)
+		local filepath   = shell.resolve(filename)
+		local world, msg = World.open(filepath)
+		if world then
+			editor.addWorld(world)
+		else
+			status.error(msg)
+		end
+	end
+	if filename then
+		load(filename)
+	else
+		status.showPrompt("Open", false, load)
+	end
+end
+
+-- Closes the current world, prompting the user if there are unsaved changes
+-- If quitAfter is true, the program will quit after the world is closed
+function editor.close(quitAfter)
+	if currentWorld.modified then
+		status.showPrompt("Discard changes?", true, function()
+			currentWorld.modified = false
+			editor.close(quitAfter)
+		end)
+	else
+		editor.removeWorldByIndex(currentWorldIndex)
+		if #worlds == 0 or quitAfter then
+			editor.quit()
+		else
+			tabs.switch(currentWorldIndex - 1)
+		end
+	end
+end
+
+-- Closes open worlds and then quits the program
+function editor.quit()
+	-- Check if any worlds have unsaved changes
+	for i = 1, #worlds do
+		if worlds[i].modified then
+			tabs.switch(i)
+			editor.close(true)
+			return
+		end
+	end
+	focus = "quit"
 end
 
 -- Saves the current world
@@ -1068,7 +960,7 @@ end
 
 -- Prompts the user for a filepath, and saves the current world there
 function editor.saveAs()
-	local function onFilenameSubmit(filename)
+	local function onSubmit(filename)
 		local filepath = shell.resolve(filename)
 		if fs.exists(filepath) and not fs.isDir(filepath) then
 			status.showPrompt("File exists, overwrite?", true, function()
@@ -1079,7 +971,7 @@ function editor.saveAs()
 		end
 	end
 
-	status.showPrompt("Save as: ", false, onFilenameSubmit)
+	status.showPrompt("Save as", false, onSubmit)
 end
 	
 -- Sets the cursor position to the relative coordinates x, y
@@ -1140,7 +1032,7 @@ end
 -- Moves the camera or the cursor to the relative coordinates x, y
 -- The type of movement is dependent on the current editor mode
 function editor.move(x, y)
-	(mode == "edit" and editor.moveCursor or editor.moveCamera)(x, y)
+	(editor.mode == "edit" and editor.moveCursor or editor.moveCamera)(x, y)
 	status.clearMessages()
 end
 
@@ -1239,26 +1131,41 @@ function editor.lineChanged(lineNum)
 	status.clearMessages()
 end
 
+-- Toggles the editor mode between view and edit
+function editor.switchMode()
+	program.halt()
+	editor.mode = editor.mode == "edit" and "view" or "edit"
+	editor.needsDraw = true
+	status.needsDraw = true
+end
+
 -- Handles events when the editor is focused
-function editor.handleEvent(event, p1, p2, p3, shiftDown, ctrlDown, altDown)
+function editor.handleEvent(event, p1, p2, p3, shiftDown, ctrlDown)
 	local world = currentWorld
 	local curX, curY = world.cursorX, world.cursorY
 	local line  = world.lines[curY]
 	local text  = line.text
 
 	if event == "key" then
-		if ctrlDown then
-			if p1 == keys.s then
-				if shiftDown then editor.saveAs() else editor.save() end
+		if ctrlDown and not shiftDown then
+			if     p1 == keys.tab then tabs.nextTab()
+			elseif p1 == keys.n   then editor.new()
+			elseif p1 == keys.o   then editor.open()
+			elseif p1 == keys.s   then editor.save()
+			elseif p1 == keys.q   then editor.quit()
+			elseif p1 == keys.w   then editor.close()
+			end
+		elseif ctrlDown and shiftDown then
+			if p1 == keys.s then editor.saveAs()
 			end
 		else
-			if     p1 == keys.tab   then -- NYI, Mode switch
+			if     p1 == keys.tab   then editor.switchMode()
 			elseif p1 == keys.up    then editor.move(0, -1)
 			elseif p1 == keys.down  then editor.move(0,  1)
 			elseif p1 == keys.left  then editor.move(-1, 0)
 			elseif p1 == keys.right then editor.move(1,  0)
 
-			elseif mode == "edit" then
+			elseif editor.mode == "edit" then
 				if     p1 == keys.home   then editor.setCursor(1, curY)
 				elseif p1 == keys["end"] then editor.setCursor(#text+1, curY)
 
@@ -1271,14 +1178,27 @@ function editor.handleEvent(event, p1, p2, p3, shiftDown, ctrlDown, altDown)
 			end
 		end
 	elseif event == "char" then
-		if mode == "edit" then editor.insert(p1) end
+		if editor.mode == "edit" then editor.insert(p1) end
+	elseif event == "timer" then
+		if p1 == status.messageTimer then status.nextMessage() end
 	end
+end
+
+-- Resizes the tabs, editor, and status windows
+function editor.resizeWindows()
+	local width, height = term.getSize()
+	tabs.window.reposition(1, 1, width, 1)
+	editor.window.reposition(1, 2, width, height-2)
+	status.window.reposition(1, height, width, 1)
+	tabs.needsDraw = true
+	editor.needsDraw = true
+	status.needsDraw = true
 end
 
 -- Grabs the cursor, as it may have been moved while drawing other areas of
 -- the screen
 function editor.grabCursor()
-	if mode == "edit" then
+	if editor.mode == "edit" then
 		editor.window.restoreCursor()
 		editor.window.setCursorBlink(true)
 		editor.window.setCursorPos(currentWorld.cursorX-currentWorld.cameraX
@@ -1293,31 +1213,39 @@ end
 ------------------------------------------------
 
 local args = {...}
+local filenames = {}
 
--- Testing :)
+for i = 1, #args do
+	local arg = args[i]
+	if arg:find "^%-%-[%a-]+$" then
 
-worlds = {
-	World.open("world.dots")
-}
+	else
+		table.insert(filenames, arg)
+	end
+end
 
-currentWorldIndex = 1
-currentWorld = worlds[currentWorldIndex]
+worlds = {}
 
-local width, height = term.getSize()
-tabs.window = window.create(term.current(), 1, 1, width, 1)
-editor.window = window.create(term.current(), 1, 2, width, height-2)
-status.window = window.create(term.current(), 1, height, width, 1)
+for i = 1, #filenames do
+	editor.open(filenames[i])
+end
 
-focus, mode = "editor", "edit"
+if #worlds == 0 then
+	worlds[1] = World.open()
+	tabs.switch(1)
+end
 
-tabs.needsDraw = true
-editor.needsDraw = true
-status.needsDraw = true
+local windowArgs = { term.current(), 1, 1, 1, 1 }
+tabs.window   = window.create(unpack(windowArgs))
+editor.window = window.create(unpack(windowArgs))
+status.window = window.create(unpack(windowArgs))
+editor.resizeWindows()
 
-local lShift, rShift, lCtrl, rCtrl, lAlt, rAlt
+focus = "editor"
 
--- Main event loop
-while true do
+-- Main Event Loop
+local lShift, rShift, lCtrl, rCtrl
+while focus ~= "quit" do
 	if currentWorld.needsUpdate then currentWorld:updateAll() end
 
 	if tabs.needsDraw   then tabs.draw()   end
@@ -1326,36 +1254,26 @@ while true do
 
 	(focus == "editor" and editor or status).grabCursor()
 
-	local event, p1, p2, p3, skip = os.pullEvent()
+	local event, p1, p2, p3 = os.pullEvent()
 	if event == "key" then
 		if     p1 == keys.leftShift  then lShift = true
 		elseif p1 == keys.rightShift then rShift = true
 		elseif p1 == keys.leftCtrl   then lCtrl  = true
 		elseif p1 == keys.rightCtrl  then rCtrl  = true
-		elseif p1 == keys.leftAlt    then lAlt   = true
-		elseif p1 == keys.rightAlt   then rAlt   = true
 		end
 	elseif event == "key_up" then
 		if     p1 == keys.leftShift  then lShift = false
 		elseif p1 == keys.rightShift then rShift = false
 		elseif p1 == keys.leftCtrl   then lCtrl  = false
 		elseif p1 == keys.rightCtrl  then rCtrl  = false
-		elseif p1 == keys.leftAlt    then lAlt   = false
-		elseif p1 == keys.rightAlt   then rAlt   = false
 		end
 	elseif event == "term_resize" then
-		local width, height = term.getSize()
-		tabs.window.reposition(1, 1, width, 1)
-		editor.window.reposition(1, 2, width, height-2)
-		status.window.reposition(1, height, width, 1)
-		tabs.needsDraw = true
-		editor.needsDraw = true
-		status.needsDraw = true
-		skip = true
+		editor.resizeWindows()
 	end
-	if not skip then
-		(focus == "editor" and editor or status)
-		.handleEvent(event, p1, p2, p3,
-			lShift or rShift, lCtrl or rCtrl, lAlt or rAlt)
-	end
+	(focus == "editor" and editor or status).handleEvent(
+		event, p1, p2, p3, lShift or rShift, lCtrl or rCtrl)
 end
+
+-- Clear the terminal after the program exits
+term.setCursorPos(1, 1)
+term.clear()
