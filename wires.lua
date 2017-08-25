@@ -21,7 +21,8 @@ local World, Dot, tabs, status, theme, editor, focus, mode, program, key
 World = {}
 
 -- Opens a world
--- If a filepath is specified, the world will be loaded from that file
+-- If a filepath is specified, the world will be loaded from that file, and
+-- if the save is successful, the world's filepath will be updated
 -- If the file exists but cannot be loaded, nil and and error message will be
 -- returned
 -- If no filepath is specified, or if the file does not exist, a
@@ -101,6 +102,7 @@ function World:write(filepath)
 	f.close()
 
 	self.modified = false
+	self.filepath = filepath
 
 	return true, 'Saved to "'..fs.getName(filepath)..'"'
 end
@@ -814,8 +816,7 @@ end
 function status.closePrompt(submit)
 	local prompt = status.prompt
 	status.prompt = nil
-	status.mode = "normal"
-	status.needsDraw = true
+	status.clearMessages()
 	if submit and prompt.onSubmit then
 		prompt.onSubmit(not prompt.isConfirm and table.concat(prompt.buffer))
 	elseif not submit and prompt.onCancel then
@@ -1046,13 +1047,15 @@ function editor.closeWorld(index)
 
 end
 
--- Saves the current world, prompting the user for a filepath if needed
-function editor.save()
-	if currentWorld.modified then
-		if not currentWorld.filepath then
+-- Saves the current world
+-- If filepath is not specified and the world does not already have a
+-- filepath, editor.saveAs() is called
+function editor.save(filepath)
+	if currentWorld.modified or filepath then
+		if not (filepath or currentWorld.filepath) then
 			editor.saveAs()
 		else
-			local success, msg = currentWorld:write()
+			local success, msg = currentWorld:write(filepath)
 			status.msg(msg, not success)
 			tabs.needsDraw = true
 		end
@@ -1061,23 +1064,14 @@ end
 
 -- Prompts the user for a filepath, and saves the current world there
 function editor.saveAs()
-	local function doSave(filepath)
-		local success, msg = currentWorld:write()
-		status.msg(msg, not success)
-		if success then
-			tabs.needsDraw = true
-			currentWorld.filepath = filepath
-		end
-	end
-
 	status.showPrompt("Save as: ", false,
 		function(filepath) -- onSubmit
 			if fs.exists(filepath) then
 				status.showPrompt("File exists, overwrite?", true, function()
-					doSave(filepath)
+					editor.save(filepath)
 				end)
 			else
-				doSave(filepath)
+				editor.save(filepath)
 			end
 		end
 	)
