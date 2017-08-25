@@ -87,7 +87,11 @@ function World:write(filepath)
 	end
 
 	if fs.isReadOnly(filepath) then
-		return false, "File is read-only"
+		return false, "Permission denied"
+	end
+
+	if fs.isDir(filepath) then
+		return false, "File is a directory"
 	end
 
 	local f = fs.open(filepath, "w")
@@ -1064,17 +1068,18 @@ end
 
 -- Prompts the user for a filepath, and saves the current world there
 function editor.saveAs()
-	status.showPrompt("Save as: ", false,
-		function(filepath) -- onSubmit
-			if fs.exists(filepath) then
-				status.showPrompt("File exists, overwrite?", true, function()
-					editor.save(filepath)
-				end)
-			else
+	local function onFilenameSubmit(filename)
+		local filepath = shell.resolve(filename)
+		if fs.exists(filepath) and not fs.isDir(filepath) then
+			status.showPrompt("File exists, overwrite?", true, function()
 				editor.save(filepath)
-			end
+			end)
+		else
+			editor.save(filepath)
 		end
-	)
+	end
+
+	status.showPrompt("Save as: ", false, onFilenameSubmit)
 end
 	
 -- Sets the cursor position to the relative coordinates x, y
