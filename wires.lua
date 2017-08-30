@@ -1,5 +1,5 @@
 ----------------------------------------------------------------
--- WIRES: An AsciiDots IDE for ComputerCraft
+-- WIRES: A ComputerCraft Editor for AsciiDots Programs
 --
 -- Copyright (C) 2017 InternetUnexplorer
 -- All rights reserved.
@@ -11,7 +11,7 @@
 local worlds, currentWorld, currentWorldIndex
 
 ----------------------------------------------------------------
-local World, Dot, tabs, status, theme, editor, focus, program
+local World, Dot, tabs, status, theme, editor, focus
 ----------------------------------------------------------------
 
 ------------------------------------------------
@@ -142,7 +142,7 @@ function World:updateLine(lineNum)
 				warpNames = {}
 			}
 			-- Add the warp names
-			while t[i] and t[i]:find "[A-Zb-z]" do
+			while t[i] and t[i]:find "%a" do
 				table.insert(line.declaration.warpNames, t[i])
 				s[i] = "declaration"
 				i = i + 1
@@ -157,7 +157,7 @@ function World:updateLine(lineNum)
 				i = i + 1
 			end
 			-- Next get the warp name
-			if t[i] == " " and t[i+1] and t[i+1]:find "[A-Zb-z]" then
+			if t[i] == " " and t[i+1] and t[i+1]:find "%a" then
 				s[i] = "whitespace"
 				s[i+1] = "declaration"
 				line.declaration = {
@@ -171,7 +171,7 @@ function World:updateLine(lineNum)
 			i = i + 2
 		-- Library warp declaration
 		elseif t[2] == "^" then
-			if t[i] and t[i]:find "[A-Zb-z]" then
+			if t[i] and t[i]:find "%a" then
 				s[i] = "declaration"
 				line.declaration = {
 					type = "lib_warp",
@@ -210,10 +210,10 @@ function World:updateLine(lineNum)
 			-- Check whether we found a closing quote or hit EOL
 			s[i] = t[i] == c and "string" or "invalid"
 		-- Path
-		elseif c:find "[|%-/\\%+><%^v%(%)]" then
+		elseif c:find "[|%-/\\%+><%^v%(%)%*]" then
 			s[i] = "path"
 		-- Control
-		elseif c == "~" or c == "!" or c == "*" then
+		elseif c == "~" or c == "!" then
 			s[i] = "control"
 		-- Operation
 		elseif c == "[" and t[i+2] == "]"
@@ -237,14 +237,14 @@ function World:updateLine(lineNum)
 		-- Digit
 		elseif c:find "%d" then
 			s[i] = "digit"
-		-- Address & value
+		-- ID & value
 		elseif c == "@" or c == "#" then
 			s[i] = "data"
 		-- IO
 		elseif c:find "[%?%$_a]" then
 			s[i] = "io"
 		-- Warp
-		elseif c:find "[A-Zb-z]" then
+		elseif c:find "%a" then
 			s[i] = "warp"
 			table.insert(line.warps, i)
 		-- Other (invalid) character
@@ -262,6 +262,7 @@ end
 -- Returns a list of line numbers for the lines which were changed
 function World:updateAll()
 	self.starts, self.warps, self.libWarp = {}, {}
+	self.longestLineWidth = 1
 	local changedLines = {}
 
 	for i = 1, #self.lines do
@@ -271,6 +272,10 @@ function World:updateAll()
 		if line.needsUpdate then
 			self:updateLine(i)
 			changed = true
+		end
+
+		if #line.text > self.longestLineWidth then
+			self.longestLineWidth = #line.text
 		end
 
 		local function mark(xPos, scope)
@@ -380,88 +385,12 @@ function World:updateAll()
 end
 
 ------------------------------------------------
--- Theme
-------------------------------------------------
-
-theme = {
-	editor = {
-		["default"]        = { fg = "0",
-		                       bg = "f" },
-		["declaration"]    = { fg = "9" },
-		["comment"]        = { fg = "d" },
-		["string"]         = { fg = "d" },
-		["control"]        = { fg = "2" },
-		["operator_bound"] = { fg = "8" },
-		["operator"]       = { fg = "2" },
-		["start"]          = { fg = "3" },
-		["end"]            = { fg = "3" },
-		["digit"]          = { fg = "4" },
-		["data"]           = { fg = "3" },
-		["io"]             = { fg = "3" },
-		["warp"]           = { fg = "3" },
-		["invalid"]        = { fg = "e" },
-		["dot"]            = { fg = "e",
-		                       bg = "f" },
-	},
-	tabs = {
-		["selected"] = { fg = "0", bg = "f" },
-		["normal"]   = { fg = "f", bg = "7" },
-	},
-	status = {
-		["default"]   = { fg = "0", bg = "f" },
-		["view_mode"] = {},
-		["edit_mode"] = {},
-		["prompt"]    = {},
-		["info_msg"]  = { fg = "5" },
-		["error_msg"] = { fg = "e" },
-		["confirm"]   = { fg = "4" },
-	}
-}
-
--- Converts a color from hex to its decimal representation
-function theme.toDecimal(hexColor)
-	return math.pow(2, tonumber(hexColor, 16))
-end
-
-------------------------------------------------
--- Dots
-------------------------------------------------
-
-Dot = {}
-
--- Creates a new dot
-function Dot:new(world, x, y)
-	return setmetatable({
-		world = world,
-		x = x,
-		y = y,
-	}, {
-		__index = Dot
-	})
-end
-
-------------------------------------------------
--- Program
-------------------------------------------------
-
-program = {}
-
--- Starts the program
-function program.run()
-
-end
-
--- Halts the program
-function program.halt()
-
-end
-
-------------------------------------------------
 -- Tab Bar
 ------------------------------------------------
 
 tabs = {
-	cameraX = 0
+	cameraX = 0,
+	scrollX = 0
 }
 
 -- Draws the tab bar to the screen
@@ -476,15 +405,17 @@ function tabs.draw()
 	for i = 1, #worlds do
 		local text, color = tabs.getTabText(i)
 		if i == currentWorldIndex then
-			if #tx - camX + text:len() > width then
-				camX = #tx - text:len()
+			if not tabs.scrollX then
+				if #tx - camX + text:len() > width then
+					camX = #tx - text:len()
+				end
+				if #tx < camX-1 then
+					camX = #tx-1
+				end
 			end
-			if #tx < camX-1 then
-				camX = #tx-1
-			end
-			color = theme.tabs.selected
+			color = theme.c.tabs.selected
 		else
-			color = theme.tabs.normal
+			color = theme.c.tabs.normal
 		end
 		for j = 1, text:len() do
 			table.insert(tx, text:sub(j, j))
@@ -492,6 +423,8 @@ function tabs.draw()
 			table.insert(bg, color.bg)
 		end
 	end
+
+	camX = camX + (tabs.scrollX or 0)
 
 	if #tx - camX < width then
 		camX = #tx - width
@@ -502,8 +435,8 @@ function tabs.draw()
 
 	for i = #tx, width-camX do
 		table.insert(tx, " ")
-		table.insert(fg, theme.tabs.normal.fg)
-		table.insert(bg, theme.tabs.normal.bg)
+		table.insert(fg, theme.c.tabs.normal.fg)
+		table.insert(bg, theme.c.tabs.normal.bg)
 	end
 
 	term.setCursorPos(1, 1)
@@ -526,10 +459,17 @@ function tabs.nextTab()
 	tabs.switch(currentWorldIndex < #worlds and currentWorldIndex + 1 or 1)
 end
 
+-- Scrolls the tabs to relative position x
+function tabs.scroll(x)
+	tabs.scrollX = (tabs.scrollX or 0) + x
+	tabs.needsDraw = true
+end
+
 -- Switches to the tab at index
 function tabs.switch(index)
 	currentWorldIndex = math.min(#worlds, math.max(index, 1))
 	currentWorld = worlds[currentWorldIndex]
+	tabs.scrollX = nil
 	tabs.needsDraw = true
 	editor.needsDraw = true
 	status.clearMessages()
@@ -554,9 +494,9 @@ function status.draw()
 	if status.mode == "message" then
 		local msg = status.messages[1]
 		if msg.isError then
-			color = theme.status.error_msg
+			color = theme.c.status.error_msg
 		else
-			color = theme.status.info_msg
+			color = theme.c.status.info_msg
 		end
 		text = msg.text
 		-- Truncate message if it is too long
@@ -566,10 +506,10 @@ function status.draw()
 	elseif status.mode == "prompt" then
 		local prompt = status.prompt
 		if prompt.isConfirm then
-			color = theme.status.confirm
+			color = theme.c.status.confirm
 			text = prompt.text.." (y/n)"
 		else
-			color = theme.status.prompt
+			color = theme.c.status.prompt
 			local camX, curX = prompt.cameraX, prompt.cursorX
 			local pText, pBuf = prompt.text..": ", prompt.buffer
 			-- Bound the cursor
@@ -592,14 +532,8 @@ function status.draw()
 		end
 	elseif status.mode == "normal" then
 		local rText, lText
-		-- Get the mode text
-		if editor.mode == "view" then
-			rText = (program.isRunning and " RUNNING" or " READY")
-			color = theme.status.view_mode
-		else
-			rText = (editor.isReplace and " REPLACE" or " INSERT")
-			color = theme.status.edit_mode
-		end
+		rText = (editor.isReplace and " REPLACE" or " INSERT")
+		color = theme.c.status.default
 		-- Get the file text
 		if currentWorld.filepath then
 			local filename, filemods = fs.getName(currentWorld.filepath)
@@ -623,8 +557,8 @@ function status.draw()
 		end
 		text = lText..rText
 	end
-	local fgColor = (color or {}).fg or theme.status.default.fg
-	local bgColor = (color or {}).bg or theme.status.default.bg
+	local fgColor = (color or {}).fg or theme.c.status.default.fg
+	local bgColor = (color or {}).bg or theme.c.status.default.bg
 	-- Draw the text
 	term.setCursorPos(1, 1)
 	term.setTextColor(theme.toDecimal(fgColor))
@@ -809,8 +743,8 @@ function editor.draw()
 	if camY < 0 then
 		camY = 0
 	end
-	if camX > #world.lines[world.cursorY].text-width+1 then
-		camX = #world.lines[world.cursorY].text-width+1
+	if camX > world.longestLineWidth-width+1 then
+		camX = world.longestLineWidth-width+1
 	end
 	if camX < 0 then
 		camX = 0
@@ -825,13 +759,15 @@ function editor.draw()
 		for x = 1, math.min(width, #line.text-camX) do
 			local s = line.scopes[x+camX]
 			tx[x] = line.text[x+camX]
-			fg[x] = (theme.editor[s] or {}).fg or theme.editor.default.fg
-			bg[x] = (theme.editor[s] or {}).bg or theme.editor.default.bg
+			fg[x] = (theme.c.editor[s] or {}).fg or theme.c.editor.default.fg
+			bg[x] = (theme.c.editor[s] or {}).bg or theme.c.editor.default.bg
 		end
 		buffer[y] = { tx = tx, fg = fg, bg = bg }
 	end
 
 	-- Draw the buffer to the window
+	term.setTextColor(theme.toDecimal(theme.c.editor.default.fg))
+	term.setBackgroundColor(theme.toDecimal(theme.c.editor.default.bg))
 	term.clear()
 	for y = 1, #buffer do
 		term.setCursorPos(1, y)
@@ -842,18 +778,20 @@ function editor.draw()
 end
 
 -- Adds a world to the worlds table
--- If the current world is not modified and a new file, it will be replaced
--- Otherwise, the world will be added as a new tab
 function editor.addWorld(world)
-	if currentWorld.isNewFile and not currentWorld.modified then
-		worlds[currentWorldIndex] = world
-		tabs.switch(currentWorldIndex)
-	else
-		table.insert(worlds, world)
-		if world.filepath then
-			worlds[world.filepath] = world
+	table.insert(worlds, world)
+	if world.filepath then
+		worlds[world.filepath] = world
+	end
+	tabs.switch(#worlds)
+end
+
+-- Returns the index of the world with filepath in the worlds table
+function editor.getWorldIndexByFilepath(filepath)
+	for i = 1, #worlds do
+		if worlds[i].filepath == filepath then
+			return i
 		end
-		tabs.switch(#worlds)
 	end
 end
 
@@ -896,19 +834,23 @@ end
 -- Opens the world with filename, or prompts for a filename if none is
 -- provided
 function editor.open(filename)
-	local function load(filename)
-		local filepath   = shell.resolve(filename)
-		local world, msg = World.open(filepath)
-		if world then
-			editor.addWorld(world)
+	local function open(filename)
+		local filepath = shell.resolve(filename)
+		if editor.getWorldByFilepath(filepath) then
+			tabs.switch(editor.getWorldIndexByFilepath(filepath))
 		else
-			status.error(msg)
+			local world, msg = World.open(filepath)
+			if world then
+				editor.addWorld(world)
+			else
+				status.error(msg)
+			end
 		end
 	end
 	if filename then
-		load(filename)
+		open(filename)
 	else
-		status.showPrompt("Open", false, load)
+		status.showPrompt("Open", false, open)
 	end
 end
 
@@ -1029,11 +971,25 @@ function editor.setCamera(x, y)
 	editor.needsDraw = true
 end
 
--- Moves the camera or the cursor to the relative coordinates x, y
--- The type of movement is dependent on the current editor mode
-function editor.move(x, y)
-	(editor.mode == "edit" and editor.moveCursor or editor.moveCamera)(x, y)
-	status.clearMessages()
+-- Jumps to the declaration of the symbol under the cursor
+-- If the symbol under the cursor is a warp, it jumps to that warp's
+-- declaration
+-- If the symbol under the cursor is a library name, then that library's file
+-- is opened
+function editor.jumpToDeclaration()
+	local world = currentWorld
+	local curX, curY = world.cursorX, world.cursorY
+	local line  = world.lines[curY]
+	if line.scopes[curX] == "warp" then
+		local warp = world.warps[line.text[curX]]
+		editor.setCursor(warp[1].x, warp[1].y)
+	elseif line.scopes[curX] == "declaration" and line.declaration then
+		if line.declaration.type == "lib" then
+			if curX <= line.declaration.name:len()+2 then
+				editor.open(line.declaration.name)
+			end
+		end
+	end
 end
 
 -- Inserts a newline at the current cursor position
@@ -1086,6 +1042,17 @@ function editor.delete()
 	end
 end
 
+-- Moves the cursor to the beginning of the current line
+function editor.lineStart()
+	editor.setCursor(1, currentWorld.cursorY)
+end
+
+-- Moves the cursor to the end of the current line
+function editor.lineEnd()
+	local world = currentWorld
+	editor.setCursor(#world.lines[world.cursorY].text+1, world.cursorY)
+end
+
 -- Moves the line at lineNum2 to the end of the line at lineNum1
 function editor.joinLines(lineNum1, lineNum2)
 	local curX  = currentWorld.cursorX
@@ -1114,6 +1081,13 @@ function editor.insert(char)
 	editor.lineChanged()
 end
 
+-- Inserts spaces until the cursor position is at a multiple of 4
+function editor.insertTab(char)
+	repeat
+		editor.insert(" ")
+	until currentWorld.cursorX % 4 == 1
+end
+
 -- Toggles editor mode between insert and replace
 function editor.toggleInsertMode()
 	editor.isReplace = not editor.isReplace
@@ -1131,14 +1105,6 @@ function editor.lineChanged(lineNum)
 	status.clearMessages()
 end
 
--- Toggles the editor mode between view and edit
-function editor.switchMode()
-	program.halt()
-	editor.mode = editor.mode == "edit" and "view" or "edit"
-	editor.needsDraw = true
-	status.needsDraw = true
-end
-
 -- Handles events when the editor is focused
 function editor.handleEvent(event, p1, p2, p3, shiftDown, ctrlDown)
 	local world = currentWorld
@@ -1154,33 +1120,38 @@ function editor.handleEvent(event, p1, p2, p3, shiftDown, ctrlDown)
 			elseif p1 == keys.s   then editor.save()
 			elseif p1 == keys.q   then editor.quit()
 			elseif p1 == keys.w   then editor.close()
+			elseif p1 == keys.b   then editor.jumpToDeclaration()
 			end
 		elseif ctrlDown and shiftDown then
 			if p1 == keys.s then editor.saveAs()
 			end
 		else
-			if     p1 == keys.tab   then editor.switchMode()
-			elseif p1 == keys.up    then editor.move(0, -1)
-			elseif p1 == keys.down  then editor.move(0,  1)
-			elseif p1 == keys.left  then editor.move(-1, 0)
-			elseif p1 == keys.right then editor.move(1,  0)
-
-			elseif editor.mode == "edit" then
-				if     p1 == keys.home   then editor.setCursor(1, curY)
-				elseif p1 == keys["end"] then editor.setCursor(#text+1, curY)
-
-				elseif p1 == keys.backspace then editor.backspace()
-				elseif p1 == keys.delete    then editor.delete()
-				elseif p1 == keys.enter     then editor.enter()
-				
-				elseif p1 == keys.insert then editor.toggleInsertMode()
-				end
+			if     p1 == keys.tab   then editor.insertTab()
+			elseif p1 == keys.up    then editor.moveCursor(0, -1)
+			elseif p1 == keys.down  then editor.moveCursor(0,  1)
+			elseif p1 == keys.left  then editor.moveCursor(-1, 0)
+			elseif p1 == keys.right then editor.moveCursor(1,  0)
+			elseif p1 == keys.home      then editor.lineStart()
+			elseif p1 == keys["end"]    then editor.lineEnd()
+			elseif p1 == keys.backspace then editor.backspace()
+			elseif p1 == keys.delete    then editor.delete()
+			elseif p1 == keys.enter     then editor.enter()
+			elseif p1 == keys.insert    then editor.toggleInsertMode()
 			end
 		end
 	elseif event == "char" then
-		if editor.mode == "edit" then editor.insert(p1) end
+			editor.insert(p1)
 	elseif event == "timer" then
-		if p1 == status.messageTimer then status.nextMessage() end
+		if p1 == status.messageTimer then
+			status.nextMessage()
+		end
+	elseif event == "mouse_scroll" then
+		if ctrlDown then tabs.switch(currentWorldIndex+p1)
+		elseif p3 == 1 then tabs.scroll(p1*4)
+		else
+			if shiftDown then editor.moveCamera(p1*2, 0)
+			else              editor.moveCamera(0, p1*2) end
+		end
 	end
 end
 
@@ -1198,14 +1169,111 @@ end
 -- Grabs the cursor, as it may have been moved while drawing other areas of
 -- the screen
 function editor.grabCursor()
-	if editor.mode == "edit" then
-		editor.window.restoreCursor()
-		editor.window.setCursorBlink(true)
-		editor.window.setCursorPos(currentWorld.cursorX-currentWorld.cameraX
-		                          ,currentWorld.cursorY-currentWorld.cameraY)
-	else
-		editor.window.setCursorBlink(false)
+	editor.window.restoreCursor()
+	editor.window.setCursorBlink(true)
+	editor.window.setCursorPos(currentWorld.cursorX-currentWorld.cameraX
+	                          ,currentWorld.cursorY-currentWorld.cameraY)
+end
+
+------------------------------------------------
+-- Theme
+------------------------------------------------
+
+theme = {
+	c = {
+		tabs = {
+			["selected"] = { fg = "0", bg = "f" },
+			["normal"] = { fg = "f", bg = "7" }
+		},
+		editor = {
+			["default"] = { fg = "0", bg = "f" }
+		},
+		status = {
+			["default"] = { fg = "0", bg = "f" }
+		}
+	}
+}
+
+-- Applies a theme on top of the current one
+function theme.apply(newTheme)
+	-- Adds the key-value pairs from t2 to t1, overwriting where necessary
+	local function addTables(t1, t2)
+		for k, v in pairs(t2) do
+			if type(t1[k]) == "table" and type(v) == "table" then
+				addTables(t1[k], v)
+			else
+				t1[k] = t2[k]
+			end
+		end
 	end
+
+	addTables(theme.c, newTheme)
+
+	tabs.needsDraw = true
+	editor.needsDraw = true
+	status.needsDraw = true
+end
+
+-- Loads a theme from a file and applies it
+function theme.loadFromFile(filename)
+	local filepath = shell.resolve(filename)
+
+	local f = fs.open(filepath, "r")
+	if f then
+		local newTheme = {}
+		for line in f.readLine do
+			local n1, n2, n3, col = line:match "(%a+)%.(%a+)%.(%a+)%s*=%s([0-9a-fA-F])"
+			newTheme[n1] = newTheme[n1] or {}
+			newTheme[n1][n2] = newTheme[n1][n2] or {}
+			newTheme[n1][n2][n3] = col
+		end
+		f.close()
+		theme.apply(newTheme)
+	end
+end
+
+-- Converts a color from hex to its decimal representation
+function theme.toDecimal(hexColor)
+	return math.pow(2, tonumber(hexColor, 16))
+end
+
+if term.isColor() then
+	theme.apply {
+		editor = {
+			["declaration"]    = { fg = "9" },
+			["comment"]        = { fg = "d" },
+			["string"]         = { fg = "d" },
+			["control"]        = { fg = "b" },
+			["operator_bound"] = { fg = "8" },
+			["operator"]       = { fg = "a" }, 
+			["start"]          = { fg = "b" },
+			["end"]            = { fg = "b" },
+			["digit"]          = { fg = "4" },
+			["data"]           = { fg = "b" },
+			["io"]             = { fg = "5" },
+			["warp"]           = { fg = "9" },
+			["invalid"]        = { fg = "e" },
+		},
+		status = {
+			["info_msg"]  = { fg = "5" },
+			["error_msg"] = { fg = "e" },
+			["confirm"]   = { fg = "4" },
+		}
+	}
+else
+	theme.apply {
+		editor = {
+			["declaration"]    = { fg = "8" },
+			["comment"]        = { fg = "8" },
+			["string"]         = { fg = "8" },
+			["operator_bound"] = { fg = "8" },
+			["start"]          = { fg = "8" },
+			["end"]            = { fg = "8" },
+			["warp"]           = { fg = "8" },
+			["invalid"]        = { fg = "0",
+			                       bg = "7" },
+		}
+	}
 end
 
 ------------------------------------------------
@@ -1214,16 +1282,50 @@ end
 
 local args = {...}
 local filenames = {}
+local themeFiles = {}
 
-for i = 1, #args do
-	local arg = args[i]
-	if arg:find "^%-%-[%a-]+$" then
+local helpText = [[
+Usage: wires [filenames]
 
+Arguments:
+ --help         Displays this help text
+ --version      Displays version information
+ --theme <file> Loads a theme from a file
+]]
+local versionText = [[
+WIRES version 0.14 (8/29/2017)
+]]
+
+local i = 1
+while i <= #args do
+	local arg, onlyFilenames = args[i]
+	if not onlyFilenames and arg:find "^%-[%a-]*$" then
+		if arg == "--" then
+			onlyFilenames = true
+		elseif arg == "--help" then
+			write(helpText)
+			return
+		elseif arg == "--version" then
+			write(versionText)
+			return
+		elseif arg == "--theme" then
+			if args[i+1] then
+				table.insert(themeFiles, args[i+1])
+				i = i + 1
+			else
+				printError "Filename expected after '--theme'"
+			end
+		else
+			printError("Unrecognized argument '"..arg.."'")
+			return
+		end
 	else
 		table.insert(filenames, arg)
 	end
+	i = i + 1
 end
 
+-- Load worlds
 worlds = {}
 
 for i = 1, #filenames do
@@ -1235,11 +1337,18 @@ if #worlds == 0 then
 	tabs.switch(1)
 end
 
+-- Create and position windows
 local windowArgs = { term.current(), 1, 1, 1, 1 }
 tabs.window   = window.create(unpack(windowArgs))
 editor.window = window.create(unpack(windowArgs))
 status.window = window.create(unpack(windowArgs))
 editor.resizeWindows()
+
+-- Load and apply themes
+theme.loadFromFile ".wires_theme"
+for i = 1, #themeFiles do
+	theme.loadFromFile(themeFiles[i])
+end
 
 focus = "editor"
 
